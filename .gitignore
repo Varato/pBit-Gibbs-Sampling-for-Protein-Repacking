@@ -1,0 +1,12 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# 工具输出（验收协议 JSON）
+out/
+
+# 杂项
+*.log
+.DS_Store

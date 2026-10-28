@@ -1,0 +1,7 @@
+# 独立运行环境（无 PyRosetta / LTSpice：能量表/χ 库/native χ 全部以 JSON/PDB 入库）。
+# 安装：
+#   python -m venv .venv
+#   .venv/Scripts/pip install -r requirements.txt   # Linux/macOS 用 .venv/bin/pip
+numpy            # 条件概率向量 / Gumbel-max / 帧缓冲
+matplotlib       # GUI 内嵌能量轨迹面板（TkAgg）
+pytest           # tests/（引擎核心 + 采样器契约 + GUI 冒烟）
