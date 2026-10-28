@@ -50,7 +50,7 @@ engine.GibbsEngine.run_sweep()          # 纯算法，零 GUI 依赖
 
 | 模块 | 职责 |
 |---|---|
-| `sampler/base.py` | ★ 接口契约：CategoricalSampler / HardwareUnavailable / clip_dyn_range |
+| `sampler/base.py` | ★ 接口契约：CategoricalSampler / HardwareUnavailable / SamplerStats / clip_dyn_range |
 | `sampler/cpu.py` | CPUSampler（Gumbel-max 参考实现，对拍基准） |
 | `sampler/mtj.py` | MTJ 硬件桩（**未实现**，构造即抛 HardwareUnavailable，2 个 TODO） |
 | `engine.py` | GibbsTable 加载 + Gibbs 引擎 + kT 日程（恒温/几何退火） |

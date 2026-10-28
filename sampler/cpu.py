@@ -7,8 +7,9 @@ argmax(log p + Gumbel) 的分布严格等于 Categorical(p)（Gumbel-max
 Run:  被导入（engine / gui / check_sampler），不直接运行
 """
 import numpy as np
+import numpy.typing as npt
 
-from .base import CategoricalSampler
+from .base import CategoricalSampler, SamplerStats
 
 
 class CPUSampler(CategoricalSampler):
@@ -16,11 +17,12 @@ class CPUSampler(CategoricalSampler):
 
     name = "cpu"
 
-    def __init__(self, seed=0):
+    def __init__(self, seed: int = 0):
         self.rng = np.random.default_rng(seed)
-        self.n_samples = self.n_fail = 0
+        self.n_samples: int = 0
+        self.n_fail: int = 0
 
-    def categorical_sample(self, p):
+    def categorical_sample(self, p: npt.ArrayLike) -> int:
         q = np.asarray(p, dtype=float)
         q = q / q.sum()                      # 防御性归一（契约允许 ±1e-6）
         with np.errstate(divide="ignore"):
@@ -29,6 +31,6 @@ class CPUSampler(CategoricalSampler):
         self.n_samples += 1
         return k
 
-    def stats(self):
+    def stats(self) -> SamplerStats:
         return {"backend": self.name, "n_samples": self.n_samples,
                 "n_fail": self.n_fail}

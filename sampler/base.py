@@ -17,8 +17,10 @@ sampler/mtj.py 的桩与 TODO）；cpu.py 是数学严格的参考实现，用�
 Run:  被导入（engine / gui / check_sampler），不直接运行
 """
 from abc import ABC, abstractmethod
+from typing import TypedDict
 
 import numpy as np
+import numpy.typing as npt
 
 
 class HardwareUnavailable(RuntimeError):
@@ -26,6 +28,17 @@ class HardwareUnavailable(RuntimeError):
 
     GUI 捕获后弹提示框，不进入采样循环；引擎侧不做重试、立即终止。
     """
+
+
+class SamplerStats(TypedDict, total=False):
+    """stats() 的返回类型：运行统计（状态栏与结果 JSON 用）。
+
+    total=False：键均可省略；引擎只读 n_samples / n_fail（缺省按 0）。
+    """
+
+    backend: str
+    n_samples: int
+    n_fail: int
 
 
 class CategoricalSampler(ABC):
@@ -52,23 +65,23 @@ class CategoricalSampler(ABC):
                   的强峰探针量化。
     """
 
-    blocking = False
-    dyn_range = None
-    name = "abstract"
+    blocking: bool = False
+    dyn_range: float | None = None
+    name: str = "abstract"
 
     @abstractmethod
-    def categorical_sample(self, p) -> int:
+    def categorical_sample(self, p: npt.ArrayLike) -> int:
         """抽一个 k ~ Categorical(p)。"""
 
-    def close(self):
+    def close(self) -> None:
         """释放资源（设备句柄、socket 等）。必须可重复调用（幂等）。"""
 
-    def stats(self) -> dict:
-        """运行统计：至少含 n_samples / n_fail（状态栏与结果 JSON 用）。"""
+    def stats(self) -> SamplerStats:
+        """运行统计（SamplerStats）：引擎只读 n_samples / n_fail。"""
         return {}
 
 
-def clip_dyn_range(p, ratio):
+def clip_dyn_range(p: npt.ArrayLike, ratio: float) -> np.ndarray:
     """把概率向量截到 [p_max/ratio, p_max] 再重归一（见 dyn_range 注释）。
 
     截断有偏（强行抬高了尾部概率）——偏多少由 check_sampler.py 的

@@ -16,13 +16,17 @@ Run:  被 worker / tests / selftest 导入，不直接运行
 """
 import json
 from dataclasses import dataclass, field
-from typing import Callable, List
+from typing import Callable
 
 import numpy as np
+import numpy.typing as npt
 
 from sampler import CategoricalSampler, HardwareUnavailable, clip_dyn_range
 
 DATA = "data"
+
+Schedule = Callable[[int], float]               # sweep 序号 → kT
+OnResidue = Callable[[int, int, float], None]    # (残基 i, sweep, kT) 进度回调
 
 # χ 与 χ+180 同一构象（末端基团二重对称）→ 距离折叠（key = 残基一字母）
 DEGEN = {"L": {2}, "F": {2}, "Y": {2}, "W": {2},
@@ -34,7 +38,7 @@ def circ_dist(a, b, fold):
     return min(d, 180 - d) if fold else d
 
 
-def cond_probs(v, kT):
+def cond_probs(v: npt.ArrayLike, kT: float) -> np.ndarray:
     """条件能量向量 → 归一概率 p = softmax(-v/kT)。
 
     Gibbs 每步的全部物理：v 越小越有利，kT 是温度。硬件拿到的 p 已经
@@ -49,14 +53,14 @@ def cond_probs(v, kT):
 @dataclass
 class GibbsTable:
     """问题实例本体 + χ 解码 + native 标记 + 参照结果（一次加载）。"""
-    res: List[str]
+    res: list[str]
     K: np.ndarray
-    ESELF: List[np.ndarray]
-    adj: List[List]                       # adj[i] = [(j, M[K_i,K_j]), ...]
-    CHIS: List[List[List[float]]]         # CHIS[i][k] = 候选 k 的 χ 向量
-    native_k: List[int]                   # 最接近 native 的候选下标
-    native_dev: List[float]               # 其最差 χ 偏差（°）
-    native_chis: List[List[float]]
+    ESELF: list[np.ndarray]
+    adj: list[list[tuple[int, np.ndarray]]]   # adj[i] = [(j, M[K_i,K_j]), ...]
+    CHIS: list[list[list[float]]]             # CHIS[i][k] = 候选 k 的 χ 向量
+    native_k: list[int]                       # 最接近 native 的候选下标
+    native_dev: list[float]                   # 其最差 χ 偏差（°）
+    native_chis: list[list[float]]
     ref: dict = field(default_factory=dict)   # gibbs_ref.json 参照（GMEC 等）
 
     def __post_init__(self):
@@ -138,12 +142,13 @@ def load_table(data_dir=DATA) -> GibbsTable:
 
 
 # ---- kT 日程 ----------------------------------------------------------------
-def kT_const(c):
+def kT_const(c: float) -> Schedule:
     """恒温。"""
     return lambda s: c
 
 
-def kT_geometric(t_hi=3.0, t_lo=0.02, n_anneal=2000):
+def kT_geometric(t_hi: float = 3.0, t_lo: float = 0.02,
+                 n_anneal: int = 2000) -> Schedule:
     """几何降温 t_hi → t_lo，到 t_lo 后 clamp 恒温续跑（防下溢）。"""
     def f(s):
         return t_hi * (t_lo / t_hi) ** (min(s, n_anneal) / n_anneal)
@@ -175,7 +180,7 @@ class GibbsEngine:
     RETRY = 3                # 单次采样失败的重试上限
 
     def __init__(self, table: GibbsTable, sampler: CategoricalSampler,
-                 kT_schedule=None, seed=0):
+                 kT_schedule: Schedule | None = None, seed: int = 0):
         self.table = table
         self.sampler = sampler
         self.kT_schedule = kT_schedule or kT_const(1.0)
@@ -183,14 +188,14 @@ class GibbsEngine:
         self.n_sweeps = 0
         self.best_state = list(self.state)
         self.best_E = table.energy(self.state)
-        self.errors: List[str] = []
+        self.errors: list[str] = []
         self._seed = seed
 
-    def set_kT_schedule(self, f: Callable[[int], float]):
+    def set_kT_schedule(self, f: Schedule) -> None:
         """软更新：下一 sweep 生效（不重置轨迹）。"""
         self.kT_schedule = f
 
-    def run_sweep(self, on_residue=None) -> Frame:
+    def run_sweep(self, on_residue: OnResidue | None = None) -> Frame:
         """一轮系统扫描。on_residue(i, sweep, kT) 在每个残基采样前回调
         （blocking 后端用于上报进度；回调可抛 SweepInterrupted 提前结束
         本轮，用于暂停/停止）。采样失败重试 ≤RETRY 次后该残基保持原态
@@ -230,5 +235,5 @@ class GibbsEngine:
                      round(self.best_E, 4), st.get("n_samples", 0),
                      st.get("n_fail", 0))
 
-    def close(self):
+    def close(self) -> None:
         self.sampler.close()

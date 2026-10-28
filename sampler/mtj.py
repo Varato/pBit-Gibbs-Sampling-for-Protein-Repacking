@@ -24,6 +24,8 @@ base.CategoricalSampler 的 categorical_sample(p)。
     HardwareUnavailable / NotImplementedError 则立即终止采样
   - 验收：python check_sampler.py --backend mtj --n 100 全 PASS 再上 GUI
 """
+import numpy.typing as npt
+
 from .base import CategoricalSampler, HardwareUnavailable
 
 
@@ -31,10 +33,10 @@ class MTJSampler(CategoricalSampler):
     """MTJ p-bit 阵列采样器（桩）。"""
 
     name = "mtj"
-    blocking = True          # TODO① 一次采样 = 一次 FPGA 往返，按实际改
-    dyn_range = None         # TODO① 器件概率动态范围上限（如 1e3）；None=不限
+    blocking: bool = True             # TODO① 一次采样 = 一次 FPGA 往返，按实际改
+    dyn_range: float | None = None    # TODO① 器件概率动态范围上限（如 1e3）；None=不限
 
-    def __init__(self, seed=0, **kw):
+    def __init__(self, seed: int = 0, **kw):
         """TODO② 连接参数（IP / 端口 / 串口 / 位流路径…）与建链。
 
         在这里建立与 FPGA 的连接并做一次自检；连不上抛 HardwareUnavailable。
@@ -45,7 +47,7 @@ class MTJSampler(CategoricalSampler):
             "（连接设备 + 实现 categorical_sample），"
             "详见 README「硬件对接」一节。")
 
-    def categorical_sample(self, p):
+    def categorical_sample(self, p: npt.ArrayLike) -> int:
         """TODO② 写入 p → 触发采样 → 返回获胜下标 int ∈ 0..K-1。
 
         伪代码（按实际通信协议替换）：
