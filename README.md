@@ -1,35 +1,36 @@
 # p-bit 概率计算硬件驱动的蛋白质侧链构象 Gibbs 采样
 
+github: https://github.com/Varato/pBit-Gibbs-Sampling-for-Protein-Repacking
+
 用 **MTJ（磁隧道结）p-bit 阵列 + FPGA 作为物理随机源**做 Gibbs 采样，演示
-问题为 1L2Y（Trp-cage）侧链 repacking。Gibbs 的每一步中，
-是从一个 K 维条件分布里抽一个类别（Categorical Distribution）；把这一步交给物理器件，物理熵源就
-替换了伪随机数发生器。核心采样接口概括如下：
+问题为 1L2Y（Trp-cage）侧链 repacking。Gibbs 的每一步中，唯一的随机操作
+是从一个 K 维条件分布里抽一个类别（Categorical）；把这一步交给物理器件，
+物理熵源就替换了伪随机数发生器。核心采样接口形式如下（下文详述）：
 
 ```python
 k = categorical_sample(p)     # p: 离散概率向量 → k: 抽中的下标
 ```
 
 温度 / 能量 / Boltzmann 折算全部在引擎侧（`engine.cond_probs`）完成，
-硬件侧拿到的 `p` 已是归一概率数组。蛋白相关的数据，如能量包，构型候选池已经预先算好，在 `data/` 下。详见下文。
+硬件侧拿到的 `p` 已是归一概率数组。蛋白相关的数据（能量表、构型候选池）已预先算好，在 `data/` 下，详见下文。
 
 ## 采样接口（`sampler/base.py`）
 
-任何随机源（软件或硬件）实现 `CategoricalSampler` 即可接入：
+随机源统一实现 `CategoricalSampler`，核心一个方法：
 
 ```python
 class CategoricalSampler(ABC):
-    blocking: bool = False          # 一次调用秒级以上 → True（引擎据此上报逐残基进度）
-    dyn_range: float | None = None  # 概率动态范围上限 p_max/p_min；器件分辨率有限才填，
-                                    # 引擎会预先截断归一（截断偏置由验收协议量化）
+    blocking: bool = False          # 单次调用是否耗时秒级以上（引擎据此上报逐残基进度）
+    dyn_range: float | None = None  # 概率动态范围上限 p_max/p_min；None = 不限
 
     def categorical_sample(self, p: ArrayLike) -> int:
-        """p: 一维非负数组 Σp≈1，长度 K 每次调用可变（本问题 2..42）
+        """p: 一维非负数组，Σp≈1，长度 K 每次调用可变（本问题 2..42）
            返回 int k ∈ 0..K-1，统计上服从 Categorical(p)"""
 ```
 
-错误语义：单次失败（超时/校验错）抛 `RuntimeError` → 引擎重试 ≤3 次，仍败
-该残基保持原态继续；`HardwareUnavailable`（未实现/断连）→ 立即终止，GUI
-弹提示。`stats()` 返回 `SamplerStats`（`n_samples`/`n_fail`，状态栏用）。
+错误语义：单次失败抛 `RuntimeError`（引擎重试 ≤3 次，仍败该残基保持
+原态）；设备不可用抛 `HardwareUnavailable`（立即终止）。其余细节见
+`base.py` 注释。
 
 ## 快速开始与验证
 
@@ -42,25 +43,21 @@ python -m venv .venv
 .venv/Scripts/python main.py                     # 打开 GUI
 ```
 
-GUI 默认"退火"模式 + CPU 后端：13 行骰子实时翻转（灰带 = 本 sweep 翻过的
-行，角上三角 = native 最近候选），能量曲线收敛到 GMEC −8.41（蓝虚线），
-右轴橙线 = kT 降温日程。selftest B 节的 GMEC 复现是金标准：CPU 后端几何
-退火 3→0.02、2000 sweep 必须命中 E=−8.407 且组合逐残基一致——改引擎/采样
-逻辑破坏这一点 = 改错了。
+代码实现了一个简易 GUI 方便观察运行过程。GUI 默认"退火"模式 + CPU
+后端，13 行骰子实时翻转，能量曲线收敛到 GMEC −8.41（蓝虚线），右轴
+橙线 = kT 降温日程：
 
-## 接入 MTJ 硬件（`sampler/mtj.py`，搜 "TODO" 共 2 处）
+![GUI 运行截图](data/gui-demo.png)
 
-1. `dyn_range` / `blocking` 类属性按器件实际填（分辨率有限 → 截断；往返
-   秒级 → blocking，GUI 显示"硬件采样中"高亮行）
-2. `__init__` 建立与 FPGA 的连接（以太网 / 串口 / 厂商 SDK…），连不上抛
-   `HardwareUnavailable`；`categorical_sample` 里完成
-   "写入 p → 触发采样 → 读回获胜下标"
-3. K 每次调用不同（2..42）：设备侧支持变长输入，或一次配置最大 K、尾部
-   补 0（补 0 的面永不获胜即可）
-4. 验收：`python check_sampler.py --backend mtj --n 100` 全 PASS 再上 GUI
+图上每行一个残基：实心格 = 当前采中的 rotamer，灰带 = 本 sweep 翻过的
+行；方格右下角的小三角标出离实验构象（native）最近的候选 rotamer。
+native 是实验测定的静态构象（1L2Y 的 NMR model 1）。
 
-未接入时 `MTJSampler` 构造即抛 `HardwareUnavailable`——GUI 弹提示、可切回
-CPU，演示链路不中断（有测试保护）。
+## 接入 MTJ 硬件
+
+硬件后端在 `sampler/mtj.py`（桩，TODO 标出待填的类属性与实现位置）：
+实现上一节的 `categorical_sample(p)` 即可，怎么实现由硬件侧定。完成后跑
+`python check_sampler.py --backend mtj --n 100` 验收。
 
 ## 文件一览
 
@@ -85,7 +82,7 @@ CPU，演示链路不中断（有测试保护）。
 | rotamer（旋转异构体） | 侧链 χ 角的一组离散稳定取值（高分辨实验结构中 χ 角聚成少数几个簇）。侧链构象本身连续，用离散 rotamer 近似后，侧链状态才能建模为组合问题。 |
 | rotamer 库（Dunbrack 库） | 按残基类型与主链 φ/ψ 统计的 rotamer 集合（χ 峰心 + 出现概率）。本仓的候选池由 PyRosetta packer 按主链构象从库中剪枝而来（即"v1 截断池"，152 候选）。 |
 | 侧链 repacking | 固定主链骨架与氨基酸序列，为每个残基从其 rotamer 池中选一个构象，使整体能量最低（或按 Boltzmann 分布采样）的组合优化问题。 |
-| native 构象 | 实验测定的真实结构；本项目指 1L2Y 的 NMR model 1。用作参照：离 native χ 最近的候选在 GUI 中标为角上三角。 |
+| native 构象 | 实验测定的静态构象；本项目指 1L2Y 的 NMR model 1。用作参照：离 native χ 最近的候选在 GUI 中标为方格右下角小三角。 |
 | GMEC | global minimum energy conformation，全构型空间中能量的全局最优解；本问题为 E = −8.407 REU。 |
 | REU | Rosetta Energy Unit：PyRosetta `ref2015` 全原子打分函数的无量纲单位（近似按 kcal/mol 标定）。本仓所有能量（`E_self`、`E_int`、E、kT、GMEC）的单位。 |
 
@@ -114,7 +111,7 @@ Pro（12/17/18/19）侧链刚性，这 7 个固定不动，其余 **13 个残基
 
 $$E(\mathbf{x}) \;=\; \sum_{i=1}^{N} E_{\mathrm{self}}(i,\,k_i)\;+\;\sum_{(i,j)\in\mathcal{E}} E_{\mathrm{int}}(i,\,k_i;\,j,\,k_j)$$
 
-其中 $N$ 为残基数，$\mathbf{x}=(k_1,\dots,k_N)$ 为各残基的候选下标组合。$i,j$索引氨基酸，$k_i, k_j$ 索引对映氨基酸那你的构象。
+其中 $N$ 为残基数，$\mathbf{x}=(k_1,\dots,k_N)$ 为各残基的候选下标组合。$i, j$ 索引氨基酸，$k_i, k_j$ 索引对应氨基酸的构象。
 
 ### 多项式的表，指数的空间
 
@@ -123,13 +120,13 @@ $$E(\mathbf{x}) \;=\; \sum_{i=1}^{N} E_{\mathrm{self}}(i,\,k_i)\;+\;\sum_{(i,j)\
 
 $$C_{\mathrm{table}} \;=\; \underbrace{N\bar K}_{\text{自能}}\;+\;\underbrace{\tfrac{N\bar c}{2}\,\bar K^{2}}_{\text{成对交互}}\;\sim\;O(N)$$
 
-$\bar K$、$\bar c$ 由残基类型与剪枝判据决定、近似与蛋白长度无关，因此
+$\bar K$、$\bar c$ 由残基类型与剪枝判据决定，近似与蛋白长度无关，因此
 **表构造随蛋白长度线性增长**。而整体构型空间的大小为
 
 $$|\Omega| \;=\; \prod_{i=1}^{N} K_i \;\le\; \bar K^{\,N} \;\le\; \langle K^{N}\rangle$$
 
 （左不等号：AM–GM；右不等号：$x\mapsto x^N$ 为凸函数，Jensen 不等式。）
-即构型数随残基数**指数**增长，是的 NP-hard 问题。
+即构型数随残基数**指数**增长，在其中找 GMEC 是 NP-hard 问题。
 
 本问题的具体数值：
 
@@ -145,8 +142,7 @@ $$|\Omega| \;=\; \prod_{i=1}^{N} K_i \;\le\; \bar K^{\,N} \;\le\; \langle K^{N}\
 
 8229 个数定义了 2×10¹⁰ 个构型中每一个的能量（因子求和即得）。要对这个
 空间做完整推断（配分函数 $Z=\sum_{\mathbf{x}} e^{-E(\mathbf{x})/kT}$、各残基边缘分布、
-GMEC），都需要遍历 $\Omega$，代价 $|\Omega|\sim\bar K^N$。N=13 时尚可一搏，
-真实蛋白 $N\sim10^2$–$10^3$ 时 $\bar K^N$。
+GMEC），都需要遍历 $\Omega$，代价 $|\Omega|\sim\bar K^N$。N=13 时尚可一搏；真实蛋白 $N\sim10^2$–$10^3$。
 
 ### Gibbs 采样
 
@@ -159,7 +155,7 @@ p(k_i=k\mid k_{-i}) \;=\; \frac{e^{-v_i(k)/kT}}{\sum_l e^{-v_i(l)/kT}}$$
 
 条件分布是 softmax，温度折算全在引擎侧（`cond_probs`）。
 
-## 预计算数据简述：`data/` 
+## 预计算数据简述：`data/`
 
 ### 能量表 `energy_table.json`
 
@@ -212,14 +208,14 @@ $$E(\mathbf{x}) \;=\; \sum_{i} E_{\text{self}}^{(i)}[k_i] \;+\; \sum_{(i,j)\in\m
 | 文件 | 内容 | 用途 |
 |---|---|---|
 | `library_chis.json` | 每残基候选的 χ 角（rotamer 库）：`{pdbnum, aa3, aa1, phi, psi, n_rotamers, rotamer_chis[[χ…], …]}` | ① 采样结果的下标 → χ 角解码（`table.chis_of`）；② 与 native 对比定出 native 最近候选 |
-| `native_chis.json` | 实验构象（NMR model 1）的每残基 χ 角：`{"N1": [292.4, 356.2], …}` | **唯一用途**：启动时算 `native_k`/`native_dev`（χ 偏差取 $\chi$/$\chi{+}180°$ 二重对称折叠后最差项），GUI 画成格角小三角 |
+| `native_chis.json` | 实验构象（NMR model 1）的每残基 χ 角：`{"N1": [292.4, 356.2], …}` | **唯一用途**：启动时算 `native_k`/`native_dev`（χ 偏差取 $\chi$/$\chi{+}180°$ 二重对称折叠后最差项），GUI 画成方格右下角小三角 |
 
 去掉 `native_chis.json` 只会失去 GUI 的 native 三角标记，采样链路本身
 不依赖它。
 
 ### `gibbs_ref.json` / `1L2Y_model1.pdb`
 
-- `gibbs_ref.json`：能量最低点（GMEC）的真值：E = −8.407，以及达成它的
+- `gibbs_ref.json`：能量最低点（GMEC）的真值，E = −8.407，以及达成它的
   逐残基组合（旧仓 Potts 退火 5 种子一致解）。selftest 拿它当金标准，
   退火必须命中同样的 E 和组合。另附 kT = 0.5 的 marginal 参照链。
 - `1L2Y_model1.pdb`：NMR model 1 原始结构（native χ 的来源，可视化参照）。
